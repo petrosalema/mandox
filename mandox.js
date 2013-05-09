@@ -467,10 +467,10 @@
 			var len = lines.length;
 			var index;
 			for (i = 0; i < len; i++) {
-				line = trim(lines[i]);
-				if (line && !('*' === line && (0 === i || len - 1 === i))) {
+				line = lines[i];
+				if (!('*' === line && (0 === i || len - 1 === i))) {
 					index = comment.push(
-						'// ' + line.replace(PREFIX_ASTERIX, '')
+						'  ' + line.replace(PREFIX_ASTERIX, '')
 					);
 					if (comment[index - 1].length > longest) {
 						longest = comment[index - 1].length;
@@ -485,8 +485,8 @@
 			var dashes = new Array(
 						Math.max(3, Math.floor((longest - title.length) / 2))
 					).join('-');
-			comment.unshift(dashes + ' ' + title + ' ' + dashes);
-			comment.push(dashes + ' /' + title + ' ' + dashes);
+			comment.unshift(dashes + ' ' + title + ' ' + dashes, '');
+			comment.push('', dashes + ' /' + title + ' ' + dashes);
 			return comment.join('\n');
 		}
 		return;

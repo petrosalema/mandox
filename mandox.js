@@ -1,4 +1,5 @@
 /**
+ * Mandox.js | (c) 2013 Petro Salema | github.com/petrosalema/mandox
  *                                __
  *                               /\ \
  *   ___ ___      __      ___    \_\ \    ___   __  _
@@ -30,15 +31,11 @@
 (function __mandox__(global) {
 	'use strict';
 
-	var TRIM_WHITESPACE = /^\s+|\s+$/;
+	var TERMINAL_WHITESPACE = /^\s+|\s+$/;
 	var THIS_EXPRESSION = /^this\./;
 	var LINE_BREAK = /[\r\n]/;
 	var PREFIX_ASTERIX = /^\*\s?/g;
 	var SIGNET = 'mandox';
-
-	function dump(obj) {
-		return JSON.stringify(obj, null, 4);
-	}
 
 	function to64(str) {
 		return global.btoa(str);
@@ -48,6 +45,9 @@
 		return global.atob(str);
 	}
 
+	/**
+	 * Finds the index of `needle` in the array `haystack`
+	 */
 	function indexOf(needle, haystack) {
 		var i;
 		var len = haystack.length;
@@ -59,12 +59,18 @@
 		return -1;
 	}
 
+	/**
+	 * Trims terminal whitespaces from the given string.
+	 */
 	function trim(str) {
-		return str.replace(TRIM_WHITESPACE, '');
+		return str.replace(TERMINAL_WHITESPACE, '');
 	}
 
 	/**
-	 * ['a', 1, 'c.d'] --> a["1"]["c.d"]
+	 * Joins a list of elemens into a string representing associative array
+	 * dereferencing.
+	 *
+	 * eg: ['a', 1, 'c.d'] --> a["1"]["c.d"]
 	 */
 	function serialize(array, transform) {
 		var i;
@@ -78,7 +84,10 @@
 	}
 
 	/**
-	 * a[1][2].b.c --> ["a", "1, "2", "b.c"]
+	 * Splits a string that represents an associative array deference into a
+	 * list of seperate properties.
+	 *
+	 * eg: a[1][2].b.c --> ["a", "1, "2", "b.c"]
 	 */
 	function tokenize(str, transform) {
 		var pos;
@@ -112,10 +121,17 @@
 		return chain;
 	}
 
+	/**
+	 * Decodes a property string that was encode when harvesting indentifieds.
+	 */
 	function decode(name) {
 		return serialize(tokenize(name), from64);
 	}
 
+	/**
+	 * Gets the call stack at the point that this function is invoked as an
+	 * array of call frame strings.
+	 */
 	var callstack = (function () {
 
 		/**
@@ -128,6 +144,10 @@
 		var SENTINAL_CALL_FRAME = / at mandox \(/;
 		var AS_EXPRESSION = / \[as .*?$/;
 
+		/**
+		 * Given a dot-seperated string representing a property chain, will
+		 * parse the next property node starting from character offset pos.
+		 */
 		function parseProperty(str, pos) {
 			var token = [str[pos++]];
 			var chr;
@@ -141,11 +161,15 @@
 			return token.join('');
 		}
 
-		// Cannot sanitize:
-		// a['.b (c).d'] = 1
-		// which yields:
-		// a.b (c).d
-		// so don't use crazy property names!
+		/**
+		 * Normalizes stacktraces callnames.
+		 *
+		 * Cannot sanitize:
+		 * a['.b (c).d'] = 1
+		 * which yields:
+		 * a.b (c).d
+		 * so don't use crazy property names!
+		 */
 		function sanitizeCallFrameName(name) {
 			name = name.replace(AS_EXPRESSION, '');
 			var str = [];
@@ -163,25 +187,29 @@
 			return str.length ? str.join('') : to64(name);
 		}
 
+		/**
+		 * Given a line from printStackTrace() output, will retrieve the name
+		 * of the callframe in that line.
+		 */
 		function parseCallFrame(line) {
 			var match = line.match(FRAME_NAME);
 			return match && sanitizeCallFrameName(match[1]);
 		}
 
 		return function () {
-			var stack = global.printStackTrace();
-			var frames = [];
-			var frame;
+			var stacktrace = global.printStackTrace();
+			var callframes = [];
+			var callframe;
 			var i;
 			var start = false;
-			for (i = 0; i < stack.length; i++) {
+			for (i = 0; i < stacktrace.length; i++) {
 				if (start) {
-					frame = parseCallFrame(stack[i]);
-					if (frame) {
-						frames.push(frame);
+					callframe = parseCallFrame(stacktrace[i]);
+					if (callframe) {
+						callframes.push(callframe);
 					}
 				} else {
-					start = SENTINAL_CALL_FRAME.test(stack[i]);
+					start = SENTINAL_CALL_FRAME.test(stacktrace[i]);
 					// Because we need to skip
 					//   "    at mandox (mandox.js:1:2)",
 					//   "    at eval (eval at <anonymous> (foo.js:1:2), <anonymous>:3:4)",
@@ -190,11 +218,32 @@
 					}
 				}
 			}
-			return frames;
+			return callframes;
 		};
 	}());
 
+	/**
+	 * Parses a closure for identifiers defined in its syntax tree.
+	 */
 	var parse = (function () {
+
+		/**
+		 * The scope recursion depth into which we should parse for symbols.
+		 * A value of -1 means infinit depth.
+		 */
+		var PARSE_DEPTH = -1;
+
+		/**
+		 * The options with witch to call esprima.
+		 */
+		var COLLECT_COMMENTS = {
+			comment: true,
+			loc: true
+		};
+
+		/**
+		 * Parses the identifier for the given code esprima code unit.
+		 */
 		function getIdentifier(unit, path) {
 			if (!unit) {
 				return;
@@ -236,17 +285,21 @@
 			return prop && (chain || '') + prop;
 		}
 
+		/**
+		 * Checks whether the given object is an array of not.
+		 */
 		function isArray(obj) {
 			return (
 				obj
 				&& typeof obj === 'object'
 				&& typeof obj.length !== 'undefined'
+				//&& obj.propertyIsEnumerable('length')
 			);
 		}
 
 		/**
-		 * Set of all possible code unit types that can be used to declare an
-		 * identifier.
+		 * The set of all possible code unit types that can be used to declare
+		 * a JavaScript identifier.
 		 */
 		var HAS_ID = {
 			AssignmentExpression: true,
@@ -258,8 +311,10 @@
 		};
 
 		/*
-		 * Expressions and statements.
-		 * An expression is any valid unit of code that resolves to a value
+		 * The set of JavaScript expression and statement types, mapped to
+		 * their sub programs.
+		 *
+		 * An expression is any valid unit of code that resolves to a value.
 		 *
 		 * @see
 		 * https://developer.mozilla.org/de/docs/JavaScript/Guide/Expressions_and_Operators
@@ -286,6 +341,9 @@
 			FunctionExpression: true
 		};
 
+		/**
+		 * Gets the sub program from a code unit.
+		 */
 		function getSubPrograms(unit) {
 			var prop = SUB_PROGRAM_PROPERTY[unit.type];
 			var body = prop && unit[prop];
@@ -297,10 +355,9 @@
 			                                 : units;
 		}
 
-		// -1 == infinit depth
-		var PARSE_DEPTH = -1;
-
 		/**
+		 * Collects the symbols in the given code unit, and it's sub programs.
+		 *
 		 * @see https://developer.mozilla.org/en-US/docs/SpiderMonkey/Parser_API
 		 */
 		function getSymbols(unit, path, ids, depth) {
@@ -342,11 +399,9 @@
 			return ids;
 		}
 
-		var COLLECT_COMMENTS = {
-			comment: true,
-			loc: true
-		};
-
+		/**
+		 * Gets the syntax tree of the given closure.
+		 */
 		function getSyntaxTree(closure) {
 			if (typeof closure !== 'function') {
 				throw '(closure must be a typeof function)';
@@ -389,6 +444,9 @@
 		};
 	}());
 
+	/**
+	 *
+	 */
 	function parseIdentifier(identifier, depth, frame) {
 		var name = identifier.path[depth];
 		if (THIS_EXPRESSION.test(name)) {
@@ -406,6 +464,15 @@
 		return name;
 	}
 
+	/**
+	 * Collects all lines of a comment block (including a comment block made up
+	 * of consecutive single line comments).
+	 *
+	 * @param {Array} comments All the comments that were parsed from a syntax tree.
+	 * @param {number} line The line of code in the same syntax tree whose
+	 *                      comment we want to retreive.
+	 * @return {Array[strings]}
+	 */
 	function collectComment(comments, line) {
 		var comment = comments[line];
 		if ('Line' !== comment.type || 0 === line) {
@@ -421,6 +488,10 @@
 		return lines;
 	}
 
+	/**
+	 * Find a comment associated with the given identifier from the given set
+	 * of comments.
+	 */
 	function findComment(identifier, comments) {
 		if (0 === comments.length) {
 			return null;
@@ -450,6 +521,9 @@
 		}
 	}
 
+	/**
+	 * Get the comment for the given identifier.
+	 */
 	function getComment(identifier, out) {
 		if (false === identifier.comment) {
 			return;
@@ -492,10 +566,16 @@
 		return;
 	}
 
+	/**
+	 *
+	 */
 	function isInScopeChain(identifier, thisValue, resolve) {
 		return thisValue === resolve(identifier.split('.')[0]);
 	}
 
+	/**
+	 *
+	 */
 	function searchSymbols(entity, symbols, resolve, frame) {
 		var identifier;
 		var depth;
@@ -534,10 +614,16 @@
 		}
 	}
 
+	/**
+	 *
+	 */
 	function searchClosure(value, closure, resolve, frame) {
 		return searchSymbols(value, parse(closure, resolve), resolve, frame);
 	}
 
+	/**
+	 *
+	 */
 	function searchStack(value, frames, resolve) {
 		var identifier;
 		var closure;
@@ -558,6 +644,9 @@
 	var evaluated = [];
 	var contexts = [];
 
+	/**
+	 *
+	 */
 	function searchContexts(value, contexts, out) {
 		var identifier;
 		var len = contexts.length;
@@ -575,6 +664,9 @@
 		}
 	}
 
+	/**
+	 *
+	 */
 	function findIdentifierByValue(value, out) {
 		var identifier = searchContexts(value, contexts, out);
 		var symbols;
@@ -590,10 +682,17 @@
 		return identifier;
 	}
 
+	/**
+	 *
+	 */
 	function findIdentifierByString(str, out) {
 		return null;
 	}
 
+	/**
+	 * Checks whether the given type string is that of an element that is too
+	 * primitive to be handled by Mandox.
+	 */
 	function isTooPrimitive(type) {
 		switch (type) {
 		case 'boolean':
@@ -604,6 +703,9 @@
 		}
 	}
 
+	/**
+	 * Out parameter type.
+	 */
 	function outparam() {
 		var value;
 		return function () {
@@ -663,6 +765,10 @@
 		}
 	}
 
+	/**
+	 * A "macro" which is to be evaluated in a JavaScript closure.  This "lift"
+	 * allows the closure variables to be accessible.
+	 */
 	function macro() {
 		var resolve = function (identifier) {
 			try { return eval(identifier); } catch (e) {}
